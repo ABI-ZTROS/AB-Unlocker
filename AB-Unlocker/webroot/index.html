@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>A/B Partition Ghost Lock Unlocker</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 警告横幅 -->
+        <div class="warning-banner" id="warning-banner" style="display: none;">
+            <div class="warning-content">
+                <span class="warning-icon">⚠️</span>
+                <span class="warning-text" id="warning-text">检测到异常</span>
+            </div>
+        </div>
+
+        <!-- 头部 -->
+        <header class="header">
+            <div class="header-content">
+                <h1>🔓 A/B 分区解锁器</h1>
+                <div class="version">v1.0.0</div>
+            </div>
+        </header>
+
+        <!-- 主内容 -->
+        <main class="main-content">
+            <!-- ⚠️ 重要提示卡片 -->
+            <section class="card important-notice" id="important-notice">
+                <div class="card-header">
+                    <h2>⚠️ 重要使用指南</h2>
+                    <button class="btn btn-sm btn-warning" onclick="toggleNotice()">
+                        <span id="notice-toggle-text">收起</span>
+                    </button>
+                </div>
+                <div class="card-body" id="notice-content">
+                    <div class="notice-section">
+                        <h3>🔍 使用条件（必须同时满足）</h3>
+                        <div class="checklist">
+                            <label class="check-item">
+                                <input type="checkbox" id="check-ota">
+                                <span>已完成OTA系统更新</span>
+                            </label>
+                            <label class="check-item">
+                                <input type="checkbox" id="check-root">
+                                <span>更新过程中保留了Root权限</span>
+                            </label>
+                            <label class="check-item">
+                                <input type="checkbox" id="check-bootloop">
+                                <span>开机第一屏卡顿超过30秒</span>
+                            </label>
+                            <label class="check-item">
+                                <input type="checkbox" id="check-camera">
+                                <span>进入系统后发现相机无法使用</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="notice-section danger-section">
+                        <h3>🚫 禁止使用的情况</h3>
+                        <ul class="forbidden-list">
+                            <li>❌ 正常使用无异常</li>
+                            <li>❌ 未进行OTA更新</li>
+                            <li>❌ 开机正常，无卡顿</li>
+                            <li>❌ 相机等外设正常工作</li>
+                            <li>❌ 其他非A/B锁死问题</li>
+                        </ul>
+                    </div>
+
+                    <div class="notice-section">
+                        <h3>📖 问题症状自查</h3>
+                        <div class="symptom-check">
+                            <p>执行以下命令确认是否为A/B锁死问题：</p>
+                            <code class="command-block">dd if=/dev/zero of=/dev/block/by-name/boot_b bs=1 count=1</code>
+                            <p>如果返回 <strong>"Device or resource busy"</strong>，则确认是分区锁死问题</p>
+                        </div>
+                    </div>
+
+                    <div class="notice-action">
+                        <button class="btn btn-primary btn-lg" id="confirm-use-btn" onclick="confirmUsage()" disabled>
+                            <span class="btn-text">我已确认符合使用条件</span>
+                        </button>
+                        <p class="warning-note">⚠️ 误用可能导致系统异常，请仔细阅读上述指南</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 设备信息卡片 -->
+            <section class="card" id="device-info" style="display: none;">
+                <div class="card-header">
+                    <h2>📱 设备信息</h2>
+                    <button class="btn-refresh" onclick="refreshDeviceInfo()" title="刷新">
+                        <span class="refresh-icon">🔄</span>
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>设备型号</label>
+                            <span id="device-model">加载中...</span>
+                        </div>
+                        <div class="info-item">
+                            <label>系统版本</label>
+                            <span id="android-version">加载中...</span>
+                        </div>
+                        <div class="info-item">
+                            <label>ColorOS版本</label>
+                            <span id="coloros-version">加载中...</span>
+                        </div>
+                        <div class="info-item">
+                            <label>当前槽位</label>
+                            <span id="current-slot" class="slot-indicator">加载中...</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 系统诊断卡片 -->
+            <section class="card" id="diagnosis-section" style="display: none;">
+                <div class="card-header">
+                    <h2>🔬 系统诊断</h2>
+                    <span class="status-badge" id="diagnosis-badge">未检测</span>
+                </div>
+                <div class="card-body">
+                    <div class="diagnosis-list" id="diagnosis-list">
+                        <!-- 诊断项目将动态添加 -->
+                    </div>
+                    <div class="diagnosis-summary" id="diagnosis-summary" style="display: none;">
+                        <h3>诊断结果</h3>
+                        <div class="summary-content" id="summary-content"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 状态检测卡片 -->
+            <section class="card" id="status-check" style="display: none;">
+                <div class="card-header">
+                    <h2>🔍 分区状态检测</h2>
+                    <span class="status-badge" id="status-badge">未知</span>
+                </div>
+                <div class="card-body">
+                    <div class="partition-list" id="partition-list">
+                        <div class="partition-item loading">
+                            <span>正在检测分区状态...</span>
+                        </div>
+                    </div>
+                    <div class="action-area">
+                        <button class="btn btn-primary btn-lg" id="check-btn" onclick="checkPartitionStatus()">
+                            <span class="btn-icon">🔍</span>
+                            <span class="btn-text">检测分区状态</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 警告信息卡片（新增） -->
+            <section class="card" id="warnings-section" style="display: none;">
+                <div class="card-header">
+                    <h2>⚠️ 检测到的异常</h2>
+                    <span class="badge-count" id="warning-count">0</span>
+                </div>
+                <div class="card-body">
+                    <div class="warnings-list" id="warnings-list">
+                        <!-- 警告项目将动态添加 -->
+                    </div>
+                    <div class="warnings-note">
+                        <p>以上问题可能是分区锁死导致的症状，但不一定必须使用本模块解决。</p>
+                        <p>建议先尝试其他方法（如重启设备、清除相机缓存等）后再使用解锁功能。</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 一键修复卡片 -->
+            <section class="card" id="fix-section" style="display: none;">
+                <div class="card-header">
+                    <h2>🛠️ 一键修复</h2>
+                </div>
+                <div class="card-body">
+                    <div class="fix-warning">
+                        <p>⚠️ <strong>警告：</strong>此操作将停止update_engine服务并清除其状态。</p>
+                        <p>仅在确认分区锁死后使用，否则可能造成不可预知的问题。</p>
+                    </div>
+                    <div class="action-area">
+                        <button class="btn btn-danger btn-lg" id="fix-btn" onclick="triggerUnlock()" disabled>
+                            <span class="btn-icon">🔧</span>
+                            <span class="btn-text">执行解锁</span>
+                        </button>
+                    </div>
+                    <div class="fix-progress" id="fix-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <div class="progress-text" id="progress-text">准备中...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 日志查看卡片 -->
+            <section class="card" id="log-section" style="display: none;">
+                <div class="card-header">
+                    <h2>📋 运行日志</h2>
+                    <div class="btn-group">
+                        <button class="btn btn-sm" onclick="refreshLogs()">刷新</button>
+                        <button class="btn btn-sm" onclick="clearLogs()">清除</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="log-container" id="log-container">
+                        <pre id="log-content">日志将显示在这里...</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 关于卡片 -->
+            <section class="card" id="about-section">
+                <div class="card-header">
+                    <h2>ℹ️ 关于</h2>
+                </div>
+                <div class="card-body">
+                    <div class="about-content">
+                        <p><strong>A/B Partition Ghost Lock Unlocker</strong></p>
+                        <p>专为ColorOS/OnePlus/Realme设备设计</p>
+                        <p>用于解决OTA更新后分区锁死问题</p>
+                        <div class="about-links">
+                            <a href="#" onclick="showFullGuide()">详细使用指南</a>
+                            <span class="divider">|</span>
+                            <a href="#" onclick="exitUI()">退出</a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 提示框 -->
+        <div class="toast-container" id="toast-container"></div>
+
+        <!-- 确认对话框 -->
+        <div class="modal" id="confirm-modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modal-title">确认操作</h3>
+                </div>
+                <div class="modal-body">
+                    <p id="modal-message">确定要执行此操作吗？</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+                    <button class="btn btn-primary" id="modal-confirm-btn" onclick="confirmModalAction()">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
