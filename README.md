@@ -1,37 +1,3 @@
-<<<<<<< HEAD
-# Root 也无法逾越的锁：一次 ColorOS A/B 更新"幽灵锁死"的验尸报告、自动化救砖及对 Google 的血泪控诉
-
----
-
-## 序言：当 root 不再是上帝 🤡
-
----
-
-## 第一章：Android 系统更新服务——那个你从未关心过的幽灵 👻
-
-### 1.1 A/B 无缝更新：Google 的骄傲 😎
-
-### 1.2 update_engine 的启动机制：从 Bootloader 到 Binder
-
-- **disabled**：该服务不会随 class main 自动启动，必须由特定事件触发。
-- **on property:ro.boot.slot_suffix=***：启动的唯一触发器是 ro.boot.slot_suffix 系统属性被设置，该属性来源于 Bootloader 通过内核命令行传递的当前激活槽位信息（如 androidboot.slot_suffix=_a）[3]。
-- **user root**：update_engine 以 root 身份运行，拥有直接读写系统分区的最高权限。
-
-### 1.3 update_engine 的状态机：严谨还是脆弱？
-
-- **正在更新**：系统正在从当前槽位运行，目标槽位中的内容"正在更新，但是尚未完成"，因此该槽位"标记为不可启动"。
-- **已应用更新，正在等待重新启动**：目标槽位已被标记为可启动但尚未成功，引导加载程序应从其启动尝试。
-- **系统重新启动到新的更新**：首次从新槽位运行，旧槽位仍为可启动且成功状态。
-- **Downloading**：写入 payload 到目标插槽，期间会创建 device-mapper 快照（COW 设备），对目标分区进行写时复制保护。官方文档在描述 Virtual A/B 实现时，明确定义了快照的合并状态包括 NONE、UNKNOWN、SNAPSHOTTED、MERGING、CANCELLED[4]。
-- **Finalizing**：执行 postinstall 脚本（若有），并开始快照合并。官方文档描述："对于其中已定义安装后步骤的每个分区，update_engine 会将新分区装载到特定位置，并执行与装载的分区对应的 OTA 中指定的程序"[1]。在此阶段，快照状态为 MERGING，合并操作将 COW 设备中的差异数据合并回原始物理分区[4]。
-- **UpdatedNeedReboot**：写入与合并完成，设置新插槽为可启动，标记"需要重启以完成更新"。官方流程描述为："系统重新启动到新的更新：系统首次从插槽 A 运行"[1]。
-- **重启进入新系统后**：update_engine 会在后台调用 markBootSuccessful()，将新槽位的"成功"属性设置为 true。官方文档明确指出："被标记为成功的槽位应该能够自行启动、运行和更新"[1]。然后进入 Idle 状态，释放旧槽的所有资源。
-
-### 1.4 独占文件描述符：内核的铁律 ⚖️
-
----
-=======
-
 # Root 也无法逾越的锁：一次 ColorOS A/B 更新"幽灵锁死"的验尸报告、自动化救砖及对 Google 的血泪控诉
 
 ## 序言：当 root 不再是上帝 🤡
@@ -49,9 +15,7 @@
 
 Android 7.0 引入了 A/B 分区机制（Seamless Updates）。Android 官方文档如此定义它的目标[1]：
 
-&gt; "A/B 系统更新（也称为无缝更新）的目标是确保在无线下载 (OTA) 更新期间在磁盘上保留一个可正常启动和使用的系统。采用这种方式可以降低更新之后设备无法启动的可能性，这意味着用户需要将设备送到维修和保修中心进行更换和刷机的情况将会减少。"
-
-"A/B 系统更新（也称为无缝更新）的目标是确保在无线下载 (OTA) 更新期间在磁盘上保留一个可正常启动和使用的系统。采用这种方式可以降低更新之后设备无法启动的可能性，这意味着用户需要将设备送到维修和保修中心进行更换和刷机的情况将会减少。"
+> "A/B 系统更新（也称为无缝更新）的目标是确保在无线下载 (OTA) 更新期间在磁盘上保留一个可正常启动和使用的系统。采用这种方式可以降低更新之后设备无法启动的可能性，这意味着用户需要将设备送到维修和保修中心进行更换和刷机的情况将会减少。"
 
 这一机制将 boot、system、vendor 等关键分区双份部署，分别称为 slot A 和 slot B。其核心设计哲学是：系统从"当前"槽位运行，但在正常操作期间，运行中的系统不会访问未使用的槽位中的分区，从而将未使用的槽位保留为后备，防范更新出错[1]。整个过程对于用户几乎是透明的，并且保留回滚能力——文档明确承诺："如果 OTA 失败，设备会启动到 OTA 之前的磁盘分区，并且仍然可以使用"[1]。
 
@@ -116,41 +80,27 @@ Idle → CheckingForUpdate → UpdateAvailable → Downloading → Verifying →
 
 update_engine 的 disabled 属性和 shutdown critical 标志，本意是确保更新过程不被打断。但当更新被打断后，这些保护机制反而成了制造幽灵的温床——它们确保了 update_engine 在持有资源时不会优雅退出，但没有任何机制确保它在被意外杀死后能释放那些资源。
 
-随手翻看上文 delta_performer.cc 中的 OpenPartition() 函数，你会发现它调用 fd-&gt;Open(partition_path.c_str(), O_RDWR, 0) 时，参数列表里连个 O_CLOEXEC 的影子都没有。而 snapshot_merge_performer.cc 的 Cleanup() 方法依赖着 Merge() 正常返回才能被调用——只要 Merge() 里任何地方抛异常或进程被杀，清理代码就是一行死字。
+随手翻看上文 delta_performer.cc 中的 OpenPartition() 函数，你会发现它调用 fd->Open(partition_path.c_str(), O_RDWR, 0) 时，参数列表里连个 O_CLOEXEC 的影子都没有。而 snapshot_merge_performer.cc 的 Cleanup() 方法依赖着 Merge() 正常返回才能被调用——只要 Merge() 里任何地方抛异常或进程被杀，清理代码就是一行死字。
 
 它选择把一切希望寄托在"更新流程必将完美运行到底"的幻想上，留下一个到处都是资源泄漏的烂摊子。而官方文档中对快照合并状态 CANCELLED 的定义[4]，暗示 Google 的设计者至少考虑过"取消"的场景——但他们偏偏没有考虑"进程被意外杀死后谁来执行取消"这个现实问题。这种设计放在任何一家正经公司，代码审查都别想通过，但它偏偏就躺在 AOSP 的主线分支里，年复一年地坑着每个刷机人。😤
->>>>>>> 295c2b2 (同步最新版本到GitHub，包含完整中文文档和全英文版本供国际友人阅读)
 
 ## 第二章：案发现场——一次完美的 OTA，一个永锁的分区 🕵️
 
 ### 2.1 复现步骤与关键故障节点
 
-<<<<<<< HEAD
-| 步骤 | 操作 | 预期结果 | 实际结果 | 可能出现问题的节点 |
-|------|------|----------|----------|---------------------|
-| 1 | 接收 ColorOS 大版本 OTA 推送，触发更新。 | 系统下载全量包， update_engine 将新系统写入未使用的插槽 B。 | 更新开始，进度条前进。 | 写入阶段：若在此阶段强制重启或断电，B 槽会被标记为不可启动且持久化状态卡在 Downloading 。但本次复现中，写入正常完成。 |
-| 2 | 写入完成后，系统提示"需要重启以完成更新"。点击重启。 | 设备重启，引导加载程序切换到插槽 B，正常进入新系统。 | 设备重启后，在开机第一屏（OEM Logo 页面）卡死超过 40 秒，随后才进入开机第二屏（bootanimation），最终进入新系统。新系统一切功能正常，无崩溃或报错。 | ⚠️ 关键预警信号：如果在更新后重启时，你观察到设备在第一屏（静态 Logo）停留了远超正常时间（通常为 5~15 秒）的40 秒以上，这是一个100% 复现的铁证。这一异常卡顿说明 update_engine 在 post-boot 阶段执行快照合并时发生了严重阻塞或线程死锁，内核在等待一个永远不会完成的 I/O 操作。提交阶段（post-boot） 的合并线程正是在此时陷入了永久的沉睡，状态文件被锁定在 UpdatedNeedReboot 或 Finalizing ，旧槽 A 的分区设备文件从此被幽灵永久攥住。如果你没有观察到这个 40 秒以上的卡顿，请不要再继续尝试复现步骤——你的设备很可能没有触发此 Bug，继续强行操作只会让你的存储颗粒折寿。 😨 |
-| 3 | 进入插槽 B 后，尝试向旧插槽 A 刷写镜像（如修补后的 boot.img ）。 | dd 命令正常写入块设备。 | dd 返回 Device or resource busy ，写入失败。 | 内核独占锁：由于步骤 2 中的合并线程已经死锁， update_engine 残留的僵尸文件描述符仍以 O_EXCL 模式持有 system_a 、 boot_a 等分区。内核拒绝任何新的写入打开，root 也无法绕过。 |
-| 4 | 尝试通过系统内本地安装 OTA 全量包（或增量包），以期覆盖或修复锁死的旧槽。 | 更新界面启动安装流程。 | 安装直接失败，没有任何有效错误提示（仅弹窗"安装失败"）。 | 状态机拒绝： update_engine 仍处于"更新未完成"的中间状态，其内部状态机拒绝接受新的 ApplyPayload 请求，返回错误码（如 kInvalidState ）。这一点证实了锁死的根源是 update_engine 的持久化状态，而非瞬时的文件占用。 |
-| 5 | 重置 Android 系统更新服务。执行 rm -rf /data/misc/update_engine/* 并 killall update_engine 。 | 服务重启后进入 Idle 状态，旧槽分区恢复空闲。 | 命令执行后，再次尝试 dd 写入旧槽 A，成功写入，一切正常。 | 唯一修复路径：清除持久化状态 + 杀死进程，迫使内核回收所有独占文件描述符。此操作相当于手动触发 Google 从未公开暴露的"异常恢复"流程。 😋 |
-
-### 2.2 徒劳的挣扎 😫
-
-=======
 为了让读者能够亲手触发这一故障，或在自己的设备上验证是否存在类似隐患，现将完整的复现过程记录如下。每一步都标注了可能出现问题的技术节点，方便定位和调试。
 
 设备状态：OnePlus 设备，搭载类原生 ColorOS，当前工作插槽为 A，系统正常运行。设备已刷机，已解锁 Bootloader，已获取 root 权限，AVB 2.0（dm-verity）处于禁用状态。 这是所有已确认案例的共同前提——未刷机、未解锁的普通用户暂未报告遭遇此问题。
 
 通过以上步骤，可以 100% 复现该幽灵锁死现象。核心问题节点在步骤 2 向步骤 3 过渡期间，即重启进入新系统后，update_engine 未能完成提交阶段，却悄无声息地保留了旧槽的设备占用。最阴险的是，整个过程中除了第一屏卡顿 40 秒这一预警信号外，系统没有任何可见错误，普通用户甚至不知道自己的旧插槽已经被永久绑架。
 
-&gt; ⚠️ 复现风险警告：如果你在步骤 2 的重启过程中没有观察到第一屏卡死超过 40 秒的现象，请立刻停止尝试。这意味着你的设备上 update_engine 的提交阶段已经正常完成，旧槽没有被锁死。此时强行执行后续步骤中的 dd 写入或重置更新服务不会带来任何好处，反而可能引入不必要的风险。更重要的是，每一次无意义的复现尝试，都是在消耗你设备上 eMMC/UFS 存储颗粒的写入寿命。你的硬盘颗粒会在天上失禁地望着你，为它们被白白浪费的 P/E 周期哭泣。😭 如果你只是为了验证本文描述的现象，看一眼第一屏的启动时间就够了——超过 40 秒就是铁证，否则请收手。
+> ⚠️ 复现风险警告：如果你在步骤 2 的重启过程中没有观察到第一屏卡死超过 40 秒的现象，请立刻停止尝试。这意味着你的设备上 update_engine 的提交阶段已经正常完成，旧槽没有被锁死。此时强行执行后续步骤中的 dd 写入或重置更新服务不会带来任何好处，反而可能引入不必要的风险。更重要的是，每一次无意义的复现尝试，都是在消耗你设备上 eMMC/UFS 存储颗粒的写入寿命。你的硬盘颗粒会在天上失禁地望着你，为它们被白白浪费的 P/E 周期哭泣。😭 如果你只是为了验证本文描述的现象，看一眼第一屏的启动时间就够了——超过 40 秒就是铁证，否则请收手。
 
-&gt; 机型与系统限定声明：截至目前，所有已确认复现的幽灵锁死案例，均出现在 OnePlus 机型或搭载 ColorOS 系统的设备上。这并不意味着其他品牌（如 Pixel、小米、三星）的 A/B 设备绝对不会出现类似问题——理论上，任何使用 A/B 更新的 Android 设备都继承了相同的代码基础——但在实际收集到的样本中，仅上述机型有确凿案例记录。如果你使用的是其他品牌设备，本文的原理分析仍然有效，但触发条件可能因 OEM 对 update_engine 的定制程度不同而存在差异，切勿在没有证据的情况下轻率归因。
+> 机型与系统限定声明：截至目前，所有已确认复现的幽灵锁死案例，均出现在 OnePlus 机型或搭载 ColorOS 系统的设备上。这并不意味着其他品牌（如 Pixel、小米、三星）的 A/B 设备绝对不会出现类似问题——理论上，任何使用 A/B 更新的 Android 设备都继承了相同的代码基础——但在实际收集到的样本中，仅上述机型有确凿案例记录。如果你使用的是其他品牌设备，本文的原理分析仍然有效，但触发条件可能因 OEM 对 update_engine 的定制程度不同而存在差异，切勿在没有证据的情况下轻率归因。
 
 ### 2.2 徒劳的挣扎 😫
 
 在发现锁死后，我进行了数小时的常规排查，结果无一例外地失败：
->>>>>>> 295c2b2 (同步最新版本到GitHub，包含完整中文文档和全英文版本供国际友人阅读)
 - umount？该分区根本没有被挂载。
 - blockdev --setrw？它已经是可读写的。
 - disable-verity？dm-verity 根本没有在保护它。虽然官方文档提到 "dm-verity 可保证设备使用的启动映像未损坏"[1]，但这里出问题的不是 dm-verity。
@@ -158,42 +108,6 @@ update_engine 的 disabled 属性和 shutdown critical 标志，本意是确保�
 - 检查 SELinux？已处于 Permissive 模式。
 - 重启设备？问题依旧。
 
-<<<<<<< HEAD
-### 2.3 怀疑的转折：从硬件锁到软件鬼魂 👻
-
-### 2.4 极端案例：相机等边缘化设备的集体叛变 📸
-
-- **vendor 分区**：包含硬件抽象层（HAL）的二进制实现，相机 HAL 就是典型的例子。
-- **odm 分区**：原始设计制造商（ODM）的自定义配置和专有库，某些传感器校准数据也放在这里。
-- **dtbo / vbmeta**：设备树叠加层和验证元数据，与内核驱动加载直接相关。
-
-- 内核和 Android 框架已经从新插槽 B 启动，期待使用新版本的 HAL 库和固件。
-- 但由于合并未完成，vendor_b 或 odm_b 中可能还残留着未合并的旧数据，或者快照设备映射并未完全拆除，导致某些库文件实际上是损坏的或不完整的。
-- 对于相机这类边缘设备，其 HAL 服务启动时发现固件版本不匹配或者关键 .so 文件无法正常加载，便会静默失败，表现为相机应用黑屏、闪光灯开关消失、或人脸识别不可用。
-- 先强制重置更新服务状态（rm -rf /data/misc/update_engine/* && killall update_engine），释放旧槽锁死，并使状态机回归 Idle。
-- 下载当前已启动系统对应的官方全量包（注意必须是当前版本，不能是旧版），通过本地 OTA 或手动 fastboot 方式将其重新刷入当前运行的插槽。
-- 这次刷写会强制覆盖所有相关分区（包括 vendor、odm、dtbo 等），消除任何残留的 COW 快照或版本不匹配，让硬件驱动恢复到该版本应有的完整状态。
-
----
-
-## 第三章：Google 的七宗罪——为什么这个 bug 如此荒谬 😡
-
-### 第一宗罪：状态机没有超时与自愈能力 💀
-
-### 第二宗罪：资源清理失败是幼儿园级的错误 🍼
-
-### 第三宗罪：对"更新完成"的定义反人类 🤔
-
-### 第四宗罪：独占锁的使用漫不经心 🔒
-
-### 第五宗罪：上梁不正下梁歪——OEM 们的变本加厉 🏠
-
-### 第六宗罪：root 权限的边界被悄然颠覆 🔑
-
-### 第七宗罪：对用户的可恢复性零考虑 🚫
-
----
-=======
 分区看起来完全正常，没有任何错误标志，但就是拒绝任何写入。它像一个黑洞，平静而坚定地吞噬掉所有写入尝试，连一个字节都不允许。🤬
 
 官方文档信誓旦旦地说："任何错误（如 I/O 错误）都只能影响未使用的分区集，并且可以进行重试"[1]。然而现在的情况是：没有任何错误报告，但旧分区集被永久锁定，且没有任何官方手段可以重试或重置。
@@ -220,11 +134,11 @@ update_engine 的 disabled 属性和 shutdown critical 标志，本意是确保�
 
 A/B 更新同样会复制这些分区（vendor_a/vendor_b、odm_a/odm_b 等）。根据 Virtual A/B 官方文档[4]的描述：
 
-&gt; "使用 Virtual A/B 时，目标槽位中的分区在更新完成之前不会直接写入。相反，对目标槽位的所有写入都会被重定向到一个名为 快照 的写时复制 (COW) 设备。"
+> "使用 Virtual A/B 时，目标槽位中的分区在更新完成之前不会直接写入。相反，对目标槽位的所有写入都会被重定向到一个名为 快照 的写时复制 (COW) 设备。"
 
 以及：
 
-&gt; "如果设备在合并完成之前断电，或者合并因故未能完成，设备在下次启动时必须能够回退到合并前的状态，或者从上次中断的地方继续合并。"
+> "如果设备在合并完成之前断电，或者合并因故未能完成，设备在下次启动时必须能够回退到合并前的状态，或者从上次中断的地方继续合并。"
 
 这两段话揭示了一个致命的事实：Google 明确承认合并可能因断电等原因未能完成，但将"如何继续合并或回退"的实现责任完全推给了 OEM，AOSP 本身并未提供强制超时或自动修复机制。😤
 
@@ -232,9 +146,9 @@ A/B 更新同样会复制这些分区（vendor_a/vendor_b、odm_a/odm_b 等）�
 
 ```
 // delta_performer.cc - ApplyPayload() 遍历所有分区并执行写入
-for (const auto&amp; partition_update : manifest.partitions()) {
+for (const auto& partition_update : manifest.partitions()) {
     // 此处依次处理 boot、system、vendor、product、odm 等所有 A/B 分区
-    if (!OpenPartition(partition_update, target_slot_suffix, &amp;fd)) {
+    if (!OpenPartition(partition_update, target_slot_suffix, &fd)) {
         return false;
     }
     // 执行实际数据写入 ...
@@ -251,13 +165,13 @@ A/B 系统更新总览文档[1] 同样列出了 A/B 更新实际覆盖的完整�
 更讽刺的是，Google 官方文档描述 Virtual A/B 时轻描淡写的一句："快照合并状态包括 MERGING、CANCELLED……"[4]，却完全没有警告开发者：如果合并意外中断，设备将进入一个"框架新、驱动旧"的割裂状态，部分外设可能永久残废，直到手动修复。 🤬
 
 而修复方法也异常粗暴但有效——既然问题根源于分区状态不一致，唯一的解药就是让所有分区重新同步到当前运行的版本：
-- 先强制重置更新服务状态（rm -rf /data/misc/update_engine/* &amp;&amp; killall update_engine），释放旧槽锁死，并使状态机回归 Idle。
+- 先强制重置更新服务状态（rm -rf /data/misc/update_engine/* && killall update_engine），释放旧槽锁死，并使状态机回归 Idle。
 - 下载当前已启动系统对应的官方全量包（注意必须是当前版本，不能是旧版），通过本地 OTA 或手动 fastboot 方式将其重新刷入当前运行的插槽。
 - 这次刷写会强制覆盖所有相关分区（包括 vendor、odm、dtbo 等），消除任何残留的 COW 快照或版本不匹配，让硬件驱动恢复到该版本应有的完整状态。
 
 这一方法已被多名用户（同样是已 root、已解锁的 OnePlus/ColorOS 设备用户）证实能够完美复活相机等设备。😋
 
-&gt; 再次重申：这些极端案例同样全部出现在已 root、AVB 已禁用的 OnePlus/ColorOS 设备上。未刷机设备用户理论上也可能遭遇快照合并失败，但由于其系统分区受到 dm-verity 的严格保护，分区级不一致通常会直接导致系统拒绝启动（回退到旧槽），而非"能启动但部分设备失效"的半残状态。恰恰是 root 和 AVB 禁用，让 Google 代码中的隐患得以用更隐蔽的方式暴露出来。 其他品牌设备目前未收集到类似极端案例报告，本文不做过度推断。
+> 再次重申：这些极端案例同样全部出现在已 root、AVB 已禁用的 OnePlus/ColorOS 设备上。未刷机设备用户理论上也可能遭遇快照合并失败，但由于其系统分区受到 dm-verity 的严格保护，分区级不一致通常会直接导致系统拒绝启动（回退到旧槽），而非"能启动但部分设备失效"的半残状态。恰恰是 root 和 AVB 禁用，让 Google 代码中的隐患得以用更隐蔽的方式暴露出来。 其他品牌设备目前未收集到类似极端案例报告，本文不做过度推断。
 
 ## 第三章：Google 的七宗罪——为什么这个 bug 如此荒谬 😡
 
@@ -273,7 +187,7 @@ update_engine 的状态机就像一列单轨火车：任何中间站抛锚，整
 
 无论进程是如何死亡的（kill -9、系统杀、自己崩溃），占用资源都必须释放。这是操作系统设计的基本准则，任何一个修过 CS101 的学生都懂。update_engine 完全可以使用 O_CLOEXEC 标志或注册 atexit 钩子来确保文件描述符被关闭，但它没有。
 
-随手翻看上文 delta_performer.cc 中的 OpenPartition() 函数，你会发现它调用 fd-&gt;Open(partition_path.c_str(), O_RDWR, 0) 时，参数列表里连个 O_CLOEXEC 的影子都没有。而 snapshot_merge_performer.cc 的 Cleanup() 方法依赖着 Merge() 正常返回才能被调用——只要 Merge() 里任何地方抛异常或进程被杀，清理代码就是一行死字。
+随手翻看上文 delta_performer.cc 中的 OpenPartition() 函数，你会发现它调用 fd->Open(partition_path.c_str(), O_RDWR, 0) 时，参数列表里连个 O_CLOEXEC 的影子都没有。而 snapshot_merge_performer.cc 的 Cleanup() 方法依赖着 Merge() 正常返回才能被调用——只要 Merge() 里任何地方抛异常或进程被杀，清理代码就是一行死字。
 
 它选择把一切希望寄托在"更新流程必将完美运行到底"的幻想上，留下一个到处都是资源泄漏的烂摊子。而官方文档中对快照合并状态 CANCELLED 的定义[4]，暗示 Google 的设计者至少考虑过"取消"的场景——但他们偏偏没有考虑"进程被意外杀死后谁来执行取消"这个现实问题。这种设计放在任何一家正经公司，代码审查都别想通过，但它偏偏就躺在 AOSP 的主线分支里，年复一年地坑着每个刷机人。😤
 
@@ -308,16 +222,11 @@ Google 给 update_engine 赋予了 user root 的最高权限[2]，让它"负责�
 官方文档自豪地宣称 A/B 更新机制可以"降低更新之后设备无法启动的可能性，这意味着用户需要将设备送到维修和保修中心进行更换和刷机的情况将会减少"[1]。
 
 但我的设备并没有"无法启动"——它启动得很好。它只是被悄悄地锁住了一个硬件资源，而且没有任何官方工具可以解除这个锁。普通用户甚至不知道自己的旧插槽已经被绑架了。高级用户发现了，也只能通过非官方的、需要 root 的暴力手段（重置更新服务）来解决。如果我没有 root 呢？如果我不懂 update_engine 的内部机制呢？答案只有两个字：忍着。😡
->>>>>>> 295c2b2 (同步最新版本到GitHub，包含完整中文文档和全英文版本供国际友人阅读)
 
 ## 第四章：破解与自动化——我如何替 Google 擦屁股 🧹
 
 ### 4.1 最简单的修复：重置更新服务
 
-<<<<<<< HEAD
-### 4.2 KernelSU 模块：自动化解锁幽灵锁 🛡️
-
-=======
 既然幽灵是因为状态文件不释放而阴魂不散，那么强制清除它的存在即可：
 
 ```
@@ -335,33 +244,13 @@ killall update_engine
 ### 4.2 KernelSU 模块：自动化解锁幽灵锁 🛡️
 
 手动敲命令不够优雅，我写了一个 KernelSU 模块，在每次开机时自动检测：
->>>>>>> 295c2b2 (同步最新版本到GitHub，包含完整中文文档和全英文版本供国际友人阅读)
 - 检测到本次启动插槽与上次记录不同（发生了 OTA 切换）
 - 向未使用的旧插槽尝试写入 0 字节探测（打开 O_WRONLY 立即关闭）
 - 如果打开失败（EBUSY），判定为幽灵锁死，立即重置 update_engine 服务
 
-<<<<<<< HEAD
----
-
-## 第五章：一份公开的判决书 ⚖️
-
-[1] A/B（无缝）系统更新官方总览文档，详述 update_engine 架构、状态流转及设计目标，但全篇未包含异常恢复逻辑；明确列出 A/B 分区涵盖 vendor、odm 等与硬件驱动直接相关的分区。
-
-[2] AOSP 源码 update_engine.rc 配置文件，证明该服务以 root 身份运行、被标记为 disabled 和 shutdown critical，缺乏进程异常退出后的资源自动释放保障。源码铁证：delta_performer.cc[7] 中 OpenPartition() 函数在打开分区文件描述符时未使用 O_CLOEXEC，导致进程异常退出时 fd 无法被内核自动回收；snapshot_merge_performer.cc[8] 中 Cleanup() 方法只能在 Merge() 正常返回后执行，异常路径下快照设备映射和块设备占用不会被清理；update_attempter_android.cc[9] 中存在 ResetStatus() 方法可重置状态机，但该方法未通过任何公开 API 暴露给用户；utils.cc[10] 中底层 OpenFile() 封装未对块设备统一添加 O_CLOEXEC。以上源码片段（已于前文完整展现）共同构成"资源泄漏与不可恢复"的完整证据链。
-  - delta_performer.cc[7] 中 OpenPartition() 函数在打开分区文件描述符时未使用 O_CLOEXEC，导致进程异常退出时 fd 无法被内核自动回收；
-  - snapshot_merge_performer.cc[8] 中 Cleanup() 方法只能在 Merge() 正常返回后执行，异常路径下快照设备映射和块设备占用不会被清理；
-  - update_attempter_android.cc[9] 中存在 ResetStatus() 方法可重置状态机，但该方法未通过任何公开 API 暴露给用户；
-  - utils.cc[10] 中底层 OpenFile() 封装未对块设备统一添加 O_CLOEXEC。以上源码片段（已于前文完整展现）共同构成"资源泄漏与不可恢复"的完整证据链。
-
-[4] Virtual A/B 概览官方文档，定义快照合并状态（NONE、UNKNOWN、SNAPSHOTTED、MERGING、CANCELLED），明确承认"合并可能因断电等原因未能完成"，但未规定进程崩溃后的自动清理机制；COW 快照机制描述直接解释了旧槽分区被独占占用的技术根源。
-
-- 本人设备复现案例（完整步骤见第二章，所有复现均在已 root、AVB 2.0 已禁用的 OnePlus/ColorOS 设备上完成）：dd 返回 Device or resource busy，证实内核级独占锁生效且无法由 root 解除；本地 OTA 安装失败证实状态机拒绝新请求；重置更新服务后一切恢复正常。
-- 社区反馈的极端案例（同样限定于已 root、AVB 已禁用的 OnePlus/ColorOS 设备）：多名用户报告 OTA 后相机、闪光灯等外设集体失效，症状符合 vendor/odm 分区 COW 快照合并中断导致 HAL 库不完整的特征；重置更新服务并重刷当前版本官包后所有设备恢复正常，证实问题根源于分区级驱动不匹配。源码 delta_performer.cc[7] 中遍历所有分区的写入逻辑（已在前文展现）和 snapshot_merge_performer.cc[8] 中 Cleanup() 的不可达路径，为极端案例提供了直接的技术解释。
-- 所有采用 A/B 无缝更新的 Android 设备均潜在继承此缺陷的代码基础，但截至目前，实际已确认触发案例仅限 OnePlus/ColorOS 平台。其他品牌设备可能存在相同隐患，但缺乏实证。
-=======
 这个模块轻量、无侵入，只在必要时执行，完美解决了 Google 留下的烂摊子。从此我的设备再也无需手动救砖。😎
 
-&gt; 模块开源地址：[GitHub 链接]（欢迎 Star 和贡献）
+> 模块开源地址：[GitHub 链接]（欢迎 Star 和贡献）
 
 ## 第五章：一份公开的判决书 ⚖️
 
@@ -386,85 +275,17 @@ killall update_engine
 判决：永久公开处刑，以儆效尤，并责令相关责任方立即采取行动：
 
 Google 方面，必须在 AOSP 中实施以下修复：
->>>>>>> 295c2b2 (同步最新版本到GitHub，包含完整中文文档和全英文版本供国际友人阅读)
 - 在 update_engine 启动时，若检测到系统已从新插槽成功运行（boot_successful = true），则无条件释放旧插槽的所有独占文件描述符和 device-mapper 映射。
 - 为所有块设备打开操作使用 O_CLOEXEC 标志，确保进程异常退出时文件描述符被内核自动回收。具体修改文件：delta_performer.cc、utils.cc。
 - 在 snapshot_merge_performer.cc 中引入超时与异常保护机制：若 Merge() 执行超过预定时间或进程收到终止信号，必须强制执行 Cleanup() 释放资源。
 - 将 update_attempter_android.cc 中的 ResetStatus() 方法通过 update_engine_client 命令公开暴露（如 update_engine_client --reset），允许用户手动强制重置更新服务状态。
 - 在官方文档中增加一节"异常恢复"，诚实告知开发者和用户 A/B 更新可能出现的资源锁死问题及其解决方案，包括因合并失败导致的硬件功能异常的修复步骤。
-<<<<<<< HEAD
-=======
 
 各大 OEM 厂商方面（目前案例集中在 ColorOS，但原理适用于所有 A/B 设备），我们同样发出呼吁 📢：
->>>>>>> 295c2b2 (同步最新版本到GitHub，包含完整中文文档和全英文版本供国际友人阅读)
 - 不要仅满足于 UI 的美观和系统的流畅度。一个真正优秀的系统，应该在用户遇到故障时，提供清晰、可排查的诊断路径，而不是让用户在黑盒中恐慌性摸索。 当 update_engine 状态异常时，系统设置中的"软件更新"页面应当显示明确的状态提示（而非沉默的"安装失败"弹窗），并提供"重置更新状态"的官方选项，让用户即使在没有 root 的情况下也能自救。
 - 对于因快照合并失败导致的边缘设备异常，系统应在开机自检阶段主动检测分区一致性，并在发现问题时通过通知栏或设置页面提示用户执行修复，而不是让用户面对"相机打不开"的诡异现象一头雾水，最终误判为硬件故障而浪费售后资源。
 - 请在厂商的官方社区和售后知识库中，加入对此类问题的排查指南。让刷机玩家在遇到问题时能够有据可查，而不是在论坛和群聊中靠口口相传的民间偏方自救——这不仅是对用户的尊重，也是对售后成本的实际节约。
 
-<<<<<<< HEAD
----
-
-## 终章：给刷机人的忠告 💬
-
----
-
-## 免责声明（必读）⚠️
-
----
-
-## 引用源链接
-
-- A/B（无缝）系统更新 - Android 开源项目官方文档  
-  https://source.android.google.cn/docs/core/ota/ab  
-  （英文版：https://source.android.com/docs/core/ota/ab）
-
-- update_engine.rc 源码 - AOSP system/update_engine/init/  
-  https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/init/update_engine.rc
-
-- boot_control HAL - Android 开源项目官方文档  
-  https://source.android.google.cn/docs/core/ota/boot_control  
-  （英文版：https://source.android.com/docs/core/ota/boot_control）
-
-- Virtual A/B 概览 - Android 开源项目官方文档  
-  https://source.android.google.cn/docs/core/ota/virtual_ab  
-  （英文版：https://source.android.com/docs/core/ota/virtual_ab）
-
-- AOSP update_engine 源码仓库  
-  https://android.googlesource.com/platform/system/update_engine/
-
-- OTA 工具与 build 系统集成 - Android 开源项目  
-  https://source.android.google.cn/docs/core/ota/tools  
-  （英文版：https://source.android.com/docs/core/ota/tools）
-
-- delta_performer.cc 源码 - AOSP system/update_engine/payload_consumer/delta_performer.cc  
-  https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/payload_consumer/delta_performer.cc  
-  关键函数：OpenPartition() 未使用 O_CLOEXEC，ApplyPayload() 遍历所有分区执行写入。
-
-- snapshot_merge_performer.cc 源码 - AOSP system/update_engine/payload_consumer/snapshot_merge_performer.cc  
-  https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/payload_consumer/snapshot_merge_performer.cc  
-  关键函数：Merge() 异常退出时 Cleanup() 不可达。
-
-- update_attempter_android.cc 源码 - AOSP system/update_engine/update_attempter_android.cc  
-  https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/update_attempter_android.cc  
-  关键函数：ResetStatus() 存在但未公开暴露。
-
-- utils.cc 源码 - AOSP system/update_engine/common/utils.cc  
-  https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/common/utils.cc  
-  关键函数：OpenFile() 底层打开未统一添加 O_CLOEXEC。
-
----
-
-## 作者
-
-周航航（DevCloud.ZTR_OS）
-
----
-
-## 项目信息
-
-- GitHub 仓库：https://github.com/ABI-ZTROS/AB-Unlocker
-- 下载地址：https://github.com/ABI-ZTROS/AB-Unlocker/releases
-=======
 前瞻性建议：为更新流程注入透明度与可观测性 🔭
 
 除了修复现有缺陷，我们也郑重建议 Google 在 update_engine 的关键状态流转节点（如进入 Finalizing、开始 Merge、Cleanup 完成等）添加明确的检查点记录。这些记录应持久化到稳定的存储区域，并在系统属性或诊断界面中向用户可见。即使官方出于谨慎不提供自动修复，至少让用户能够查看到类似这样的信息：
@@ -513,10 +334,10 @@ Android 开源项目官方文档洋洋洒洒数千字，描述了 A/B 无缝更�
 刷机或许不是"正常人"干的事，但代码的健壮性值得细细考量和测试 🧪——哪怕一行简单的 O_CLOEXEC，或者一个检查点日志，都可能在未来拯救成千上万块被误认为"变砖"的设备。我们呼吁 Google 和 OEM 厂商在开发过程中，不仅考虑理想的成功路径，也为意外中断留下合理的退路。
 
 如果你在梦中穿越到硅谷，想就此事与 Google 开发团队进行一番"友好交流"，请前往以下地址：
-&gt; Googleplex 总部
-&gt; 1600 Amphitheatre Parkway
-&gt; Mountain View, CA 94043
-&gt; United States
+> Googleplex 总部
+> 1600 Amphitheatre Parkway
+> Mountain View, CA 94043
+> United States
 
 到达后请径直走向 Building 43（Android 雕像草坪所在地），对着那群给 update_engine 写状态机的人，替我问一句：
 
@@ -526,9 +347,9 @@ Android 开源项目官方文档洋洋洒洒数千字，描述了 A/B 无缝更�
 
 如果他们反问"你怎么找到这里的"——告诉他们：比你们代码更靠谱的，是 GPS。 😋
 
-&gt; 作者：周航航（DevCloud.ZTR_OS）
-&gt; 完整案例复现、模块源码及更多技术细节，尽在 GitHub 仓库：https://github.com/ABI-ZTROS/AB-Unlocker
-&gt; 如果这篇文章帮你拯救过设备，或者让你笑出了声，请给个 Star——那是给 Google 工程师最好的耳光。 😋
+> 作者：周航航（DevCloud.ZTR_OS）
+> 完整案例复现、模块源码及更多技术细节，尽在 GitHub 仓库：https://github.com/ABI-ZTROS/AB-Unlocker
+> 如果这篇文章帮你拯救过设备，或者让你笑出了声，请给个 Star——那是给 Google 工程师最好的耳光。 😋
 
 ## 引用源链接
 
@@ -560,4 +381,3 @@ Android 开源项目官方文档洋洋洒洒数千字，描述了 A/B 无缝更�
 - utils.cc 源码 - AOSP system/update_engine/common/utils.cc
   https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/common/utils.cc
   关键函数：OpenFile() 底层打开未统一添加 O_CLOEXEC。
->>>>>>> 295c2b2 (同步最新版本到GitHub，包含完整中文文档和全英文版本供国际友人阅读)
