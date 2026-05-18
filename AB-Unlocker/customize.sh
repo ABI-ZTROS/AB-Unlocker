@@ -33,17 +33,26 @@ check_compatibility() {
     ui_print "正在检查设备兼容性..."
     ui_print "=================================="
     
-    # 获取设备基本信息
+    # 获取设备基本信息（支持多个属性来源）
+    local model=$(getprop ro.product.model 2>/dev/null)
+    [ -z "$model" ] && model=$(getprop ro.product.system.model 2>/dev/null)
+    local manufacturer=$(getprop ro.product.manufacturer 2>/dev/null)
+    [ -z "$manufacturer" ] && manufacturer=$(getprop ro.product.system.manufacturer 2>/dev/null)
+    local brand=$(getprop ro.product.brand 2>/dev/null)
+    [ -z "$brand" ] && brand=$(getprop ro.product.system.brand 2>/dev/null)
+    
     ui_print "设备信息:"
-    ui_print "  - 型号: $(getprop ro.product.model 2>/dev/null)"
-    ui_print "  - 制造商: $(getprop ro.product.manufacturer 2>/dev/null)"
-    ui_print "  - 品牌: $(getprop ro.product.brand 2>/dev/null)"
+    ui_print "  - 型号: $model"
+    ui_print "  - 制造商: $manufacturer"
+    ui_print "  - 品牌: $brand"
     
     # 获取系统版本
     ui_print ""
     ui_print "系统版本:"
     check_prop "ro.build.version.release"
+    check_prop "ro.system.build.version.release"
     check_prop "ro.build.version.sdk"
+    check_prop "ro.system.build.version.sdk"
     
     # 检查ColorOS/Realme UI标识
     ui_print ""
@@ -51,23 +60,28 @@ check_compatibility() {
     local coloros_detected=0
     local device_type=""
     
-    # OPPO/一加/Realme检测
+    # OPPO/一加/Realme检测 - 支持多个属性来源
     local manufacturer=$(getprop ro.product.manufacturer 2>/dev/null | tr '[:upper:]' '[:lower:]')
     local brand=$(getprop ro.product.brand 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    local system_brand=$(getprop ro.product.system.brand 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    local system_manufacturer=$(getprop ro.product.system.manufacturer 2>/dev/null | tr '[:upper:]' '[:lower:]')
     
-    if [ "$manufacturer" = "oppo" ] || [ "$brand" = "oppo" ]; then
+    # 合并所有可能的属性值
+    local all_brands="$manufacturer $brand $system_brand $system_manufacturer"
+    
+    if echo "$all_brands" | grep -qE "(oppo|oppomobile)"; then
         coloros_detected=1
         device_type="OPPO"
         ui_print "  ✅ 检测到OPPO设备"
     fi
     
-    if [ "$manufacturer" = "oneplus" ] || [ "$brand" = "oneplus" ]; then
+    if echo "$all_brands" | grep -qE "(oneplus|oplus)"; then
         coloros_detected=1
         device_type="OnePlus"
-        ui_print "  ✅ 检测到OnePlus设备"
+        ui_print "  ✅ 检测到OnePlus设备 (oplus)"
     fi
     
-    if [ "$manufacturer" = "realme" ] || [ "$brand" = "realme" ]; then
+    if echo "$all_brands" | grep -qE "(realme|realmobile)"; then
         coloros_detected=1
         device_type="Realme"
         ui_print "  ✅ 检测到Realme设备"
@@ -191,17 +205,20 @@ create_directories() {
 # ========================================
 
 check_android_version() {
+    # 支持多个属性来源
     local api_level=$(getprop ro.build.version.sdk 2>/dev/null)
+    local system_api_level=$(getprop ro.system.build.version.sdk 2>/dev/null)
+    local release_version=$(getprop ro.build.version.release 2>/dev/null)
+    local system_release_version=$(getprop ro.system.build.version.release 2>/dev/null)
     
-    if [ -z "$api_level" ]; then
-        ui_print "⚠️ 无法获取Android API级别"
-        return 0
-    fi
+    # 优先使用非空值
+    [ -z "$api_level" ] && api_level="$system_api_level"
+    [ -z "$release_version" ] && release_version="$system_release_version"
     
-    ui_print "Android API级别: $api_level"
+    ui_print "Android版本: $release_version (API $api_level)"
     
     # 最低支持Android 11 (API 30)
-    if [ "$api_level" -lt 30 ]; then
+    if [ -n "$api_level" ] && [ "$api_level" -lt 30 ]; then
         ui_print "⚠️ 警告: 模块针对Android 11+优化"
         ui_print "  低于Android 11的版本可能无法正常工作"
     fi
