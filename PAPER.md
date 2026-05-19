@@ -146,8 +146,7 @@ bool DeltaPerformer::OpenPartition(const PartitionUpdate& partition,
   }
   
   // 打开块设备文件 - 关键问题所在
-  int fd = open(partition_path.c_str(), O_WRONLY);
-  if (fd < 0) {
+  if (!fd->Open(partition_path.c_str(), O_RDWR, 0)) {
     PLOG(ERROR) << "Failed to open " << partition_path << " for writing";
     return false;
   }
@@ -158,8 +157,8 @@ bool DeltaPerformer::OpenPartition(const PartitionUpdate& partition,
 
 **逐句分析**：
 
-1. `int fd = open(partition_path.c_str(), O_WRONLY);`
-   - **问题**：调用 open() 系统调用打开块设备文件，仅使用了 O_WRONLY 标志，缺少 O_CLOEXEC 标志
+1. `fd->Open(partition_path.c_str(), O_RDWR, 0)`
+   - **问题**：调用 FileDescriptor 类的 Open 方法，传入的 flags 仅包含 O_RDWR，缺少 O_CLOEXEC 标志
    - **技术后果**：如果 update_engine 进程在持有该文件描述符期间调用 exec() 执行其他程序，该文件描述符会被继承到子进程中，即使父进程退出，文件描述符仍可能保持打开状态
    - **内核行为**：Linux 内核在进程退出时会关闭该进程打开的所有文件描述符，但如果存在以下情况，文件描述符可能不会被立即释放：
      - 进程通过 fork() 创建了子进程，子进程继承了该文件描述符
