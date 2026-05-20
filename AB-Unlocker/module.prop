@@ -1,6 +1,6 @@
 id=ab-unlocker
 name=A/B Partition Ghost Lock Unlocker
-version=v1.0.0
-versionCode=1
+version=v1.1.0
+versionCode=11
 author=周航航(DevCloud.ZTR_OS)
-description=自动检测并解除Android A/B分区因OTA更新失败导致的幽灵锁死问题。专为ColorOS/OnePlus/Realme设备设计。
+description=【实验性质】自动检测并解除Android A/B分区因OTA更新失败导致的幽灵锁死问题。专为ColorOS/OnePlus/Realme设备设计。支持自动化和手动两种操作模式。遇到问题请深呼吸，然后联系开发者寻求帮助。
