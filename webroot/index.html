@@ -21,7 +21,7 @@
         <header class="header">
             <div class="header-content">
                 <h1>🔓 A/B 分区解锁器</h1>
-                <div class="version">v1.0.0</div>
+                <div class="version">v1.1.0</div>
             </div>
         </header>
 
@@ -117,6 +117,44 @@
                 </div>
             </section>
 
+            <!-- 操作模式选择卡片 - 新增 -->
+            <section class="card" id="mode-selection" style="display: none;">
+                <div class="card-header">
+                    <h2>⚙️ 操作模式</h2>
+                </div>
+                <div class="card-body">
+                    <div class="mode-selector">
+                        <div class="mode-options">
+                            <div class="mode-option">
+                                <input type="radio" name="mode" id="mode-auto" value="auto" checked>
+                                <label for="mode-auto">
+                                    <div class="mode-title">🤖 自动化模式</div>
+                                    <div class="mode-description">
+                                        模块自动检测并修复<br>
+                                        推荐大多数用户使用
+                                    </div>
+                                </label>
+                            </div>
+                            <div class="mode-option">
+                                <input type="radio" name="mode" id="mode-manual" value="manual">
+                                <label for="mode-manual">
+                                    <div class="mode-title">🛠️ 手动模式</div>
+                                    <div class="mode-description">
+                                        手动控制每一步操作<br>
+                                        适合高级用户
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="action-area">
+                        <button class="btn btn-primary btn-lg" id="mode-confirm-btn" onclick="confirmModeSelection()">
+                            <span class="btn-text">确认模式并继续</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
             <!-- 系统诊断卡片 -->
             <section class="card" id="diagnosis-section" style="display: none;">
                 <div class="card-header">
@@ -155,7 +193,7 @@
                 </div>
             </section>
 
-            <!-- 警告信息卡片（新增） -->
+            <!-- 警告信息卡片 -->
             <section class="card" id="warnings-section" style="display: none;">
                 <div class="card-header">
                     <h2>⚠️ 检测到的异常</h2>
